@@ -1,4 +1,4 @@
-name: Deploy OmniRoute EC2
+name: Deploy OmniRoute
 
 on:
   workflow_dispatch:
@@ -17,6 +17,15 @@ on:
           - next
           - 3.8.50-web
           - 3.8.50
+      target:
+        description: 'Target host untuk deploy'
+        required: false
+        default: 'ec2'
+        type: choice
+        options:
+          - ec2
+          - homelab
+          - both
       verify_only:
         description: 'Hanya verifikasi (tanpa pull/restart container)'
         required: false
@@ -24,19 +33,36 @@ on:
         type: boolean
 
 concurrency:
-  group: omniroute-deploy
+  group: omniroute-deploy-${{ inputs.target }}
   cancel-in-progress: false
 
 jobs:
-  deploy:
+  deploy-ec2:
     name: Deploy ke EC2
+    if: ${{ inputs.target == 'ec2' || inputs.target == 'both' }}
     runs-on: [self-hosted, Linux, X64, omniroute-ec2]
     timeout-minutes: 15
+    env:
+      COMPOSE_DIR: /home/ubuntu/omniroute
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+      - name: Deploy OmniRoute (EC2)
+        shell: bash
+        run: |
+          bash scripts/deploy.sh "${{ inputs.image_tag }}" "${{ inputs.verify_only }}"
 
-      - name: Deploy OmniRoute
+  deploy-homelab:
+    name: Deploy ke Homelab
+    if: ${{ inputs.target == 'homelab' || inputs.target == 'both' }}
+    runs-on: [self-hosted, Linux, X64, omniroute-homelab]
+    timeout-minutes: 15
+    env:
+      COMPOSE_DIR: /home/bazyngan/omniroute
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Deploy OmniRoute (Homelab)
         shell: bash
         run: |
           bash scripts/deploy.sh "${{ inputs.image_tag }}" "${{ inputs.verify_only }}"

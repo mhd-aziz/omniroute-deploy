@@ -7,7 +7,7 @@ set -euo pipefail
 TAG="${1:-latest-web}"
 VERIFY_ONLY="${2:-false}"
 
-COMPOSE_DIR="/home/ubuntu/omniroute"
+COMPOSE_DIR="${COMPOSE_DIR:-/home/ubuntu/omniroute}"
 COMPOSE_FILE="$COMPOSE_DIR/docker-compose.yml"
 IMAGE="diegosouzapw/omniroute:$TAG"
 STAMP="$(date +%Y%m%d-%H%M%S)"
