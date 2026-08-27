@@ -91,7 +91,18 @@ if [ "$LIVE" != "200" ]; then
   exit 1
 fi
 
-# ---------- 7. bersihkan image dangling (aman) ----------
+# ---------- 7. bersihkan image lama omniroute (hemat disk) ----------
+echo "--- cleanup image lama ---"
+for img in $(docker images "diegosouzapw/omniroute" --format '{{.Repository}}:{{.Tag}}'); do
+  [ "$img" = "$IMAGE" ] && continue
+  echo "hapus: $img"
+  docker rmi "$img" || true
+done
 docker image prune -f >/dev/null 2>&1 || true
+
+echo "--- verifikasi final ---"
+docker ps --filter name=omniroute --format '{{.Names}} | {{.Image}} | {{.Status}}'
+docker images "diegosouzapw/omniroute*" --format '{{.Repository}}:{{.Tag}} | {{.Size}}'
+df -h / | tail -1
 
 echo "==> SELESAI (backup: docker-compose.yml.bak-$STAMP)"
