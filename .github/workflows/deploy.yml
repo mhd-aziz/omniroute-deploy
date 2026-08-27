@@ -1,0 +1,42 @@
+name: Deploy OmniRoute EC2
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Tag image OmniRoute (diegosouzapw/omniroute:<tag>)'
+        required: false
+        default: 'latest-web'
+        type: choice
+        options:
+          - latest-web
+          - main-web
+          - latest
+          - main
+          - next-web
+          - next
+          - 3.8.50-web
+          - 3.8.50
+      verify_only:
+        description: 'Hanya verifikasi (tanpa pull/restart container)'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: omniroute-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy ke EC2
+    runs-on: [self-hosted, Linux, X64, omniroute-ec2]
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy OmniRoute
+        shell: bash
+        run: |
+          bash scripts/deploy.sh "${{ inputs.image_tag }}" "${{ inputs.verify_only }}"
