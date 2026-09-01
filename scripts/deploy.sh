@@ -46,12 +46,12 @@ cp -a "$COMPOSE_FILE" "$COMPOSE_DIR/docker-compose.yml.bak-$STAMP"
 echo "backup: docker-compose.yml.bak-$STAMP"
 
 # ---------- 2. set image tag ----------
-if ! grep -q "image: diegosouzapw/omniroute:" "$COMPOSE_FILE"; then
+if ! grep -q "image: diegosouzapw/omniroute" "$COMPOSE_FILE"; then
   echo "FATAL: pattern image omniroute tidak ditemukan di compose" >&2
   exit 1
 fi
-sed -i "s|image: diegosouzapw/omniroute:.*|image: $IMAGE|" "$COMPOSE_FILE"
-echo "compose image line -> $(grep 'image: diegosouzapw/omniroute:' "$COMPOSE_FILE")"
+sed -i "s|image: diegosouzapw/omniroute.*|image: $IMAGE|" "$COMPOSE_FILE"
+echo "compose image line -> $(grep 'image: diegosouzapw/omniroute' "$COMPOSE_FILE")"
 
 # ---------- 3. pull ----------
 if ! docker compose pull omniroute; then
