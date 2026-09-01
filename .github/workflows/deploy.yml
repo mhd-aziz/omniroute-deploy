@@ -4,19 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: 'Tag image OmniRoute (diegosouzapw/omniroute:<tag>)'
+        description: 'Tag image OmniRoute (diegosouzapw/omniroute:<tag>) — bebas isi tag apa pun dari Docker Hub'
         required: false
         default: 'latest-web'
-        type: choice
-        options:
-          - latest-web
-          - main-web
-          - latest
-          - main
-          - next-web
-          - next
-          - 3.8.50-web
-          - 3.8.50
+        type: string
       target:
         description: 'Target host untuk deploy'
         required: false
@@ -49,8 +40,11 @@ jobs:
         uses: actions/checkout@v7
       - name: Deploy OmniRoute (EC2)
         shell: bash
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          VERIFY_ONLY: ${{ inputs.verify_only }}
         run: |
-          bash scripts/deploy.sh "${{ inputs.image_tag }}" "${{ inputs.verify_only }}"
+          bash scripts/deploy.sh "$IMAGE_TAG" "$VERIFY_ONLY"
 
   deploy-homelab:
     name: Deploy ke Homelab
@@ -64,5 +58,8 @@ jobs:
         uses: actions/checkout@v7
       - name: Deploy OmniRoute (Homelab)
         shell: bash
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          VERIFY_ONLY: ${{ inputs.verify_only }}
         run: |
-          bash scripts/deploy.sh "${{ inputs.image_tag }}" "${{ inputs.verify_only }}"
+          bash scripts/deploy.sh "$IMAGE_TAG" "$VERIFY_ONLY"
