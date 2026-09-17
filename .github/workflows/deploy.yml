@@ -1,10 +1,12 @@
 name: Deploy OmniRoute
 
+# MANUAL TRIGGER ONLY — sengaja tidak ada push/schedule/watcher.
+# User men-trigger sendiri dari tab Actions saat mau update.
 on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: 'Tag image OmniRoute (diegosouzapw/omniroute:<tag>) — bebas isi tag apa pun dari Docker Hub'
+        description: 'Tag image OmniRoute (diegosouzapw/omniroute:<tag>) — bebas tag apa pun dari Docker Hub, atau sha256:<digest>'
         required: false
         default: 'latest-web'
         type: string
@@ -17,11 +19,22 @@ on:
           - ec2
           - homelab
           - both
+      cleanup:
+        description: 'Mode pembersihan disk (full = recreate + hapus image lama supaya containerd GC membuang snapshot lama)'
+        required: false
+        default: 'normal'
+        type: choice
+        options:
+          - normal
+          - full
       verify_only:
-        description: 'Hanya verifikasi (tanpa pull/restart container)'
+        description: 'Hanya verifikasi (cek tag + laporan disk, tanpa pull/restart)'
         required: false
         default: false
         type: boolean
+
+permissions:
+  contents: read
 
 concurrency:
   group: omniroute-deploy-${{ inputs.target }}
@@ -32,7 +45,7 @@ jobs:
     name: Deploy ke EC2
     if: ${{ inputs.target == 'ec2' || inputs.target == 'both' }}
     runs-on: [self-hosted, Linux, X64, omniroute-ec2]
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       COMPOSE_DIR: /home/ubuntu/omniroute
     steps:
@@ -40,17 +53,21 @@ jobs:
         uses: actions/checkout@v7
       - name: Deploy OmniRoute (EC2)
         shell: bash
+        # Input hanya dari workflow_dispatch (repo owner), dan tetap disalurkan
+        # lewat env: + dikutip di dalam script — bukan diinterpolasi langsung ke
+        # shell. Ini pola aman yang disarankan; script juga memvalidasi nilainya.
         env:
           IMAGE_TAG: ${{ inputs.image_tag }}
           VERIFY_ONLY: ${{ inputs.verify_only }}
+          CLEANUP: ${{ inputs.cleanup }}
         run: |
-          bash scripts/deploy.sh "$IMAGE_TAG" "$VERIFY_ONLY"
+          bash scripts/deploy.sh "$IMAGE_TAG" "$VERIFY_ONLY" "$CLEANUP"
 
   deploy-homelab:
     name: Deploy ke Homelab
     if: ${{ inputs.target == 'homelab' || inputs.target == 'both' }}
     runs-on: [self-hosted, Linux, X64, omniroute-homelab]
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       COMPOSE_DIR: /home/bazyngan/omniroute
     steps:
@@ -61,5 +78,18 @@ jobs:
         env:
           IMAGE_TAG: ${{ inputs.image_tag }}
           VERIFY_ONLY: ${{ inputs.verify_only }}
+          CLEANUP: ${{ inputs.cleanup }}
         run: |
-          bash scripts/deploy.sh "$IMAGE_TAG" "$VERIFY_ONLY"
+          bash scripts/deploy.sh "$IMAGE_TAG" "$VERIFY_ONLY" "$CLEANUP"
+
+# Catatan:
+# - cleanup=full akan ME-RESTART OmniRoute (stop -> backup DB -> rm container ->
+#   up). Dipakai saat mau reklaim disk. Homelab melayani Hermes (omnilocal),
+#   jadi pilih waktunya dengan sadar.
+# - cleanup=normal (default) tidak me-restart container kalau image tidak berubah.
+# - Script HANYA mengubah baris `image:` di docker-compose.yml. Blok environment,
+#   volumes, command, ports TIDAK pernah disentuh.
+# - Volume omniroute-data (DB) tidak pernah dihapus. Di mode full DB di-backup
+#   dulu ke <COMPOSE_DIR>/db-backup-<stamp>.tar.gz (retention 2 terbaru).
+# - Log job memuat laporan disk SEBELUM/SESUDAH + jumlah containerd snapshot,
+#   sehingga penumpukan layer lama langsung kelihatan.
