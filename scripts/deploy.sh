@@ -4,7 +4,9 @@
 # Dipanggil dari GitHub Actions (self-hosted runner), bisa juga manual di host.
 #
 # Usage: deploy.sh [IMAGE_TAG] [VERIFY_ONLY] [CLEANUP]
-#   IMAGE_TAG   : tag Docker Hub diegosouzapw/omniroute (default: latest-web).
+#   IMAGE_TAG   : tag Docker Hub diegosouzapw/omniroute (default: next-web).
+#                 JANGAN pakai latest-web — build 27 Ags 2026, lebih tua 3 minggu
+#                 dari next-web (17 Sep 2026) yang sedang berjalan di kedua host.
 #                 Boleh juga digest sha256:<64hex>.
 #   VERIFY_ONLY : true = hanya cek tag + laporan disk, tanpa pull/restart.
 #   CLEANUP     : normal (default) = rmi tag omniroute lain + prune dangling.
@@ -20,7 +22,7 @@
 # ==============================================================================
 set -euo pipefail
 
-TAG="${1:-latest-web}"
+TAG="${1:-next-web}"
 VERIFY_ONLY="${2:-false}"
 CLEANUP="${3:-normal}"
 

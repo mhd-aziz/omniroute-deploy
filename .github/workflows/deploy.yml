@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: 'Tag image OmniRoute (diegosouzapw/omniroute:<tag>) — bebas tag apa pun dari Docker Hub, atau sha256:<digest>'
+        description: 'Tag image OmniRoute (diegosouzapw/omniroute:<tag>) — default next-web (JANGAN latest-web: image 27 Ags, 3 minggu lebih tua) atau sha256:<digest>'
         required: false
-        default: 'latest-web'
+        default: 'next-web'
         type: string
       target:
         description: 'Target host untuk deploy'

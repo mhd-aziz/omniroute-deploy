@@ -15,8 +15,11 @@ schedule, atau watcher.
 
 1. Buka https://github.com/mhd-aziz/omniroute-deploy/actions/workflows/deploy.yml
 2. Klik **Run workflow**, isi:
-   - **`image_tag`** — tag `diegosouzapw/omniroute` dari Docker Hub (default `latest-web`).
+   - **`image_tag`** — tag `diegosouzapw/omniroute` dari Docker Hub (default `next-web`).
      Boleh tag apa pun (`main-web`, `next-web`, …) atau digest `sha256:<64hex>`.
+     ⚠️ **JANGAN pakai `latest-web`** — tag itu menunjuk build **27 Ags 2026**,
+     sementara `next-web` build **17 Sep 2026** (3 minggu lebih baru, dan itu yang
+     sedang berjalan di kedua host). Pakai `latest-web` = DOWNGRADE.
    - **`target`** — `ec2` | `homelab` | `both`.
    - **`cleanup`** — `normal` (default) atau `full` (lihat bagian Pembersihan disk).
    - **`verify_only`** — centang untuk cek tag + laporan disk saja, tanpa pull/restart.
@@ -101,6 +104,19 @@ Identik dan urut sama = terbukti. Cek juga `.Created` harus cocok timestamp buil
 4. Jangan mengutak-atik `meta.db` atau `rm -rf` store containerd secara manual;
    `ctr snapshots rm` memang selalu gagal `cannot remove snapshot with child`.
    Jalur yang benar adalah hapus image lewat docker → containerd GC bersih sendiri.
+
+## TODO yang belum diperbaiki
+
+**Step cleanup masih menghapus tag omniroute lain (termasuk `next-web`) dengan
+asumsi "tag omniroute lain = versi lama".** Asumsi itu benar untuk UPDATE
+(image baru punya id berbeda dari image lama), sehingga id lama memang aman
+dibuang. Tapi **salah untuk DEPLOY ULANG TAG YANG SAMA** (mis. tag `next-web`
+diulang): container masih memakai image id lama, sehingga yang dibuang justru
+tag `next-web` itu sendiri — image next-web hilang dari daftar lokal (reclaim
+disk tetap jalan, karena GC memang membersihkan layer lama).
+
+Perbaikan yang benar: hapus HANYA tag yang tidak menunjuk ke id target maupun
+id yang sedang dipakai container. Belum di-apply — menunggu keputusan user.
 
 ## Runner
 
