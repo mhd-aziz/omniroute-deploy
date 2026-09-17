@@ -169,7 +169,7 @@ docker compose config -q || { echo "FATAL: docker-compose.yml invalid" >&2; exit
 say "--- container saat ini ---"
 docker ps -a --filter name=omniroute --format '{{.Names}} | {{.Image}} | {{.Status}}' || true
 CUR_ID="$(docker inspect -f '{{.Image}}' omniroute 2>/dev/null || true)"
-CUR_VER="$(docker exec omniroute node /app/bin/omniroute.mjs --version 2>/dev/null || true)"
+CUR_VER="$(docker exec omniroute node -e "console.log(require('/app/package.json').version)" 2>/dev/null || true)"
 say "image id sekarang: ${CUR_ID:-<tidak jalan>} | version: ${CUR_VER:-<n/a>}"
 
 FREE_BEFORE="$(free_bytes)"
@@ -230,7 +230,7 @@ TARGET_ID="$(docker image inspect "$IMAGE" --format '{{.Id}}' 2>/dev/null || tru
 say "image target terpasang: ${TARGET_ID:-<n/a>}"
 
 # smoke test image baru (non-fatal)
-SMOKE="$(docker run --rm --entrypoint node "$IMAGE" /app/bin/omniroute.mjs --version 2>/dev/null || true)"
+SMOKE="$(docker run --rm --entrypoint node "$IMAGE" -e "console.log(require('/app/package.json').version)" 2>/dev/null || true)"
 say "versi image baru: ${SMOKE:-<tidak terbaca, lanjut>}"
 
 # ---------- 4. cleanup FULL: stop -> backup DB -> hapus container -> rmi ----------
@@ -283,7 +283,7 @@ done
 say "--- verifikasi ---"
 docker ps --filter name=omniroute --format '{{.Names}} | {{.Image}} | {{.Status}}'
 NEW_ID="$(docker inspect -f '{{.Image}}' omniroute 2>/dev/null || true)"
-NEW_VER="$(docker exec omniroute node /app/bin/omniroute.mjs --version 2>/dev/null || true)"
+NEW_VER="$(docker exec omniroute node -e "console.log(require('/app/package.json').version)" 2>/dev/null || true)"
 say "image id akhir: ${NEW_ID:-<n/a>} | version: ${NEW_VER:-<n/a>}"
 if [ -n "$CUR_ID" ] && [ "$CUR_ID" = "$NEW_ID" ]; then
   say "CATATAN: image id TIDAK berubah (tag $TAG memang sudah versi terbaru)"
