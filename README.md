@@ -6,7 +6,15 @@ Repo deploy OmniRoute via GitHub Actions **self-hosted runner** ke dua host:
 |---|---|---|---|
 | `ec2` | `omniroute-ec2` (EC2) | `omniroute-ec2` | `/home/ubuntu/omniroute` |
 | `homelab` | `homelab` (.19) | `omniroute-homelab` | `/home/bazyngan/omniroute` |
-| `both` | keduanya (job paralel) | — | — |
+| `akamai` | `akamai-vm` (172.237.65.70) | `omniroute-akamai` | `/home/ubuntu/omniroute` |
+| `all` | ketiganya (job paralel) | — | — |
+
+Catatan akamai-vm: OmniRoute listen di **port 20129** (bukan 20128 — port itu
+dipakai 9Router di VM yang sama). Akses publik lewat Cloudflare Tunnel
+`omniroute-akamai` → `https://omnirouteakamai.zisaltech.site` (unit:
+`cloudflared-omniroute-akamai.service`, config: `/etc/cloudflared/config-omniroute-akamai.yml`).
+Runner EC2 sudah offline (masa sewa habis); pilih target `ec2` hanya kalau
+runner itu sudah aktif lagi.
 
 Deploy **selalu manual** (`workflow_dispatch`). Sengaja TIDAK ada push trigger,
 schedule, atau watcher.
@@ -20,7 +28,7 @@ schedule, atau watcher.
      ⚠️ **JANGAN pakai `latest-web`** — tag itu menunjuk build **27 Ags 2026**,
      sementara `next-web` build **17 Sep 2026** (3 minggu lebih baru, dan itu yang
      sedang berjalan di kedua host). Pakai `latest-web` = DOWNGRADE.
-   - **`target`** — `ec2` | `homelab` | `both`.
+   - **`target`** — `ec2` | `homelab` | `akamai` | `all`.
    - **`cleanup`** — `normal` (default) atau `full` (lihat bagian Pembersihan disk).
    - **`verify_only`** — centang untuk cek tag + laporan disk saja, tanpa pull/restart.
 3. Klik **Run workflow**, tunggu job hijau.

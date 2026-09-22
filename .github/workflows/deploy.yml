@@ -18,7 +18,8 @@ on:
         options:
           - ec2
           - homelab
-          - both
+          - akamai
+          - all
       cleanup:
         description: 'Mode pembersihan disk (full = recreate + hapus image lama supaya containerd GC membuang snapshot lama)'
         required: false
@@ -43,7 +44,7 @@ concurrency:
 jobs:
   deploy-ec2:
     name: Deploy ke EC2
-    if: ${{ inputs.target == 'ec2' || inputs.target == 'both' }}
+    if: ${{ inputs.target == 'ec2' || inputs.target == 'all' }}
     runs-on: [self-hosted, Linux, X64, omniroute-ec2]
     timeout-minutes: 20
     env:
@@ -65,7 +66,7 @@ jobs:
 
   deploy-homelab:
     name: Deploy ke Homelab
-    if: ${{ inputs.target == 'homelab' || inputs.target == 'both' }}
+    if: ${{ inputs.target == 'homelab' || inputs.target == 'all' }}
     runs-on: [self-hosted, Linux, X64, omniroute-homelab]
     timeout-minutes: 20
     env:
@@ -74,6 +75,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
       - name: Deploy OmniRoute (Homelab)
+        shell: bash
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          VERIFY_ONLY: ${{ inputs.verify_only }}
+          CLEANUP: ${{ inputs.cleanup }}
+        run: |
+          bash scripts/deploy.sh "$IMAGE_TAG" "$VERIFY_ONLY" "$CLEANUP"
+
+  deploy-akamai:
+    name: Deploy ke Akamai VM
+    if: ${{ inputs.target == 'akamai' || inputs.target == 'all' }}
+    runs-on: [self-hosted, Linux, X64, omniroute-akamai]
+    timeout-minutes: 20
+    env:
+      COMPOSE_DIR: /home/ubuntu/omniroute
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Deploy OmniRoute (Akamai)
         shell: bash
         env:
           IMAGE_TAG: ${{ inputs.image_tag }}
