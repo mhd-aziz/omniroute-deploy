@@ -4,17 +4,19 @@ Repo deploy OmniRoute via GitHub Actions **self-hosted runner** ke dua host:
 
 | Target | Host | Runner label | Compose dir |
 |---|---|---|---|
-| `ec2` | `omniroute-ec2` (EC2) | `omniroute-ec2` | `/home/ubuntu/omniroute` |
 | `homelab` | `homelab` (.19) | `omniroute-homelab` | `/home/bazyngan/omniroute` |
 | `akamai` | `akamai-vm` (172.237.65.70) | `omniroute-akamai` | `/home/ubuntu/omniroute` |
-| `all` | ketiganya (job paralel) | — | — |
+| `all` | keduanya (job paralel) | — | — |
 
 Catatan akamai-vm: OmniRoute listen di **port 20129** (bukan 20128 — port itu
 dipakai 9Router di VM yang sama). Akses publik lewat Cloudflare Tunnel
 `omniroute-akamai` → `https://omnirouteakamai.zisaltech.site` (unit:
 `cloudflared-omniroute-akamai.service`, config: `/etc/cloudflared/config-omniroute-akamai.yml`).
-Runner EC2 sudah offline (masa sewa habis); pilih target `ec2` hanya kalau
-runner itu sudah aktif lagi.
+
+Target `ec2` DIHAPUS (2026-09-23): VM EC2 sudah mati/expired dan tidak
+digunakan lagi. Runner `omniroute-ec2` di GitHub masih terdaftar tapi offline —
+dibiarkan saja; kalau nanti mau deploy ke EC2 lagi, daftarkan runner baru dan
+tambahkan kembali job-nya.
 
 Deploy **selalu manual** (`workflow_dispatch`). Sengaja TIDAK ada push trigger,
 schedule, atau watcher.
@@ -28,7 +30,7 @@ schedule, atau watcher.
      ⚠️ **JANGAN pakai `latest-web`** — tag itu menunjuk build **27 Ags 2026**,
      sementara `next-web` build **17 Sep 2026** (3 minggu lebih baru, dan itu yang
      sedang berjalan di kedua host). Pakai `latest-web` = DOWNGRADE.
-   - **`target`** — `ec2` | `homelab` | `akamai` | `all`.
+   - **`target`** — `homelab` | `akamai` | `all` (default `akamai`).
    - **`cleanup`** — `normal` (default) atau `full` (lihat bagian Pembersihan disk).
    - **`verify_only`** — centang untuk cek tag + laporan disk saja, tanpa pull/restart.
 3. Klik **Run workflow**, tunggu job hijau.
@@ -128,8 +130,8 @@ id yang sedang dipakai container. Belum di-apply — menunggu keputusan user.
 
 ## Runner
 
-- `omniroute-ec2` — lokasi `/home/ubuntu/actions-runner`, service
-  `actions.runner.mhd-aziz-omniroute-deploy.omniroute-ec2.service`
 - `omniroute-homelab` — lokasi `/home/bazyngan/actions-runner-omniroute`, service
   `actions.runner.mhd-aziz-omniroute-deploy.omniroute-homelab.service`
+- `omniroute-akamai` — lokasi `/home/ubuntu/actions-runner-omniroute` (akamai-vm), service
+  `actions.runner.mhd-aziz-omniroute-deploy.omniroute-akamai.service`
 - Log runner: `/home/<user>/actions-runner*/_diag/Runner*.log`

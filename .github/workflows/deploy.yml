@@ -13,10 +13,9 @@ on:
       target:
         description: 'Target host untuk deploy'
         required: false
-        default: 'ec2'
+        default: 'akamai'
         type: choice
         options:
-          - ec2
           - homelab
           - akamai
           - all
@@ -42,28 +41,6 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy-ec2:
-    name: Deploy ke EC2
-    if: ${{ inputs.target == 'ec2' || inputs.target == 'all' }}
-    runs-on: [self-hosted, Linux, X64, omniroute-ec2]
-    timeout-minutes: 20
-    env:
-      COMPOSE_DIR: /home/ubuntu/omniroute
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-      - name: Deploy OmniRoute (EC2)
-        shell: bash
-        # Input hanya dari workflow_dispatch (repo owner), dan tetap disalurkan
-        # lewat env: + dikutip di dalam script — bukan diinterpolasi langsung ke
-        # shell. Ini pola aman yang disarankan; script juga memvalidasi nilainya.
-        env:
-          IMAGE_TAG: ${{ inputs.image_tag }}
-          VERIFY_ONLY: ${{ inputs.verify_only }}
-          CLEANUP: ${{ inputs.cleanup }}
-        run: |
-          bash scripts/deploy.sh "$IMAGE_TAG" "$VERIFY_ONLY" "$CLEANUP"
-
   deploy-homelab:
     name: Deploy ke Homelab
     if: ${{ inputs.target == 'homelab' || inputs.target == 'all' }}
