@@ -116,7 +116,16 @@ backup_db() {
 cleanup_tags() {
   # hapus semua tag omniroute KECUALI image ber-ID yang dilewatkan sebagai argumen.
   # Argumen = daftar ID yang WAJIB dipertahankan (dipisah spasi).
-  local keep_ids=" $* " id ref failed=0
+  # Normalisasi: simpan versi penuh DAN versi pendek 12-char, karena
+  # `docker images --format {{.ID}}` mengembalikan ID PENDEK sedangkan
+  # `docker inspect -f {{.Image}}` memberi sha256:<64-char>.
+  local norm="" k
+  for k in "$@"; do
+    [ -z "$k" ] && continue
+    k="${k#sha256:}"
+    norm="$norm ${k} ${k:0:12}"
+  done
+  local keep_ids=" $norm " id ref failed=0
   if [ "$keep_ids" = "  " ]; then
     say "  WARNING: tidak ada ID image untuk dipertahankan — cleanup tag dilewati (aman)"
     return 0
@@ -143,7 +152,12 @@ cleanup_tags() {
 
 retention_compose_backup() {
   # HANYA dipanggil setelah deploy sukses — kalau gagal, semua backup dibiarkan
-  ls -1t "$COMPOSE_DIR"/docker-compose.yml.bak-* 2>/dev/null | tail -n +$((BACKUP_KEEP+1)) | while read -r f; do
+  # ls gagal (exit 2) kalau glob tidak match — e.g. host baru belum punya
+  # backup sama sekali. Jangan biarkan itu membunuh script (set -e/pipefail).
+  local olds
+  olds="$(ls -1t "$COMPOSE_DIR"/docker-compose.yml.bak-* 2>/dev/null || true)"
+  [ -z "$olds" ] && return 0
+  echo "$olds" | tail -n +$((BACKUP_KEEP+1)) | while read -r f; do
     say "  hapus backup compose lama: $(basename "$f")"
     rm -f "$f" 2>/dev/null || true
   done
