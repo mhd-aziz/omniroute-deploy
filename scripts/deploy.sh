@@ -293,9 +293,13 @@ else
   say "CATATAN: image berubah: ${CUR_ID:-<lama>} -> ${NEW_ID:-<baru>}"
 fi
 
-LIVE="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:20128/livez || true)"
-HEALTH="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:20128/healthz || true)"
-say "livez: $LIVE | healthz: $HEALTH"
+# Port probe diambil dari port host yang di-publish container
+# (homelab = 20128, akamai = 20129 — tidak di-hardcode lagi)
+PORT="$(docker inspect omniroute --format '{{range $p, $b := .NetworkSettings.Ports}}{{range $b}}{{.HostPort}}{{end}}{{end}}' 2>/dev/null || true)"
+PORT="${PORT:-20128}"
+LIVE="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/livez" || true)"
+HEALTH="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/healthz" || true)"
+say "livez: $LIVE | healthz: $HEALTH (port $PORT)"
 
 if [ "$LIVE" != "200" ]; then
   echo "WARNING: livez tidak 200 — periksa log container!" >&2
