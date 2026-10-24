@@ -2,11 +2,16 @@ name: Deploy OmniRoute
 
 # MANUAL TRIGGER ONLY — sengaja tidak ada push/schedule/watcher.
 # User men-trigger sendiri dari tab Actions saat mau update.
+#
+# Catatan keamanan: workflow_dispatch hanya bisa dipicu orang dengan akses write
+# ke repo ini. Semua input tetap dialirkan lewat `env:` (bukan interpolasi
+# langsung ke baris `run:`) dan bentuknya divalidasi di scripts/deploy.sh
+# sebelum dipakai, jadi tidak ada jalur command injection dari input.
 on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: 'Tag image OmniRoute (diegosouzapw/omniroute:<tag>) — default next-web (JANGAN latest-web: image 27 Ags, 3 minggu lebih tua) atau sha256:<digest>'
+        description: 'Tag image OmniRoute (diegosouzapw/omniroute:<tag>) atau sha256:<digest>. Default next-web. JANGAN pilih tag hanya karena namanya "latest" — cek freshness build dari registry dulu.'
         required: false
         default: 'next-web'
         type: string
@@ -32,20 +37,29 @@ on:
         required: false
         default: false
         type: boolean
+      allow_no_db_backup:
+        description: 'Lanjutkan cleanup=full walau backup DB GAGAL (default: batalkan cleanup dan hidupkan container kembali)'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
-
-concurrency:
-  group: omniroute-deploy-${{ inputs.target }}
-  cancel-in-progress: false
 
 jobs:
   deploy-homelab:
     name: Deploy ke Homelab
     if: ${{ inputs.target == 'homelab' || inputs.target == 'all' }}
     runs-on: [self-hosted, Linux, X64, omniroute-homelab]
-    timeout-minutes: 20
+    # 35 menit: pull image next-web di homelab pernah 15m45s, dan cleanup=full
+    # menambah backup DB volume (~50s untuk DB 176MB). 20 menit terlalu mepet.
+    timeout-minutes: 35
+    # Concurrency per HOST, bukan per nilai input: kalau di-key `inputs.target`,
+    # run `all` dan run `homelab` masuk grup berbeda sehingga bisa mengantre
+    # dua job untuk host yang sama.
+    concurrency:
+      group: omniroute-deploy-homelab
+      cancel-in-progress: false
     env:
       COMPOSE_DIR: /home/bazyngan/omniroute
     steps:
@@ -57,6 +71,7 @@ jobs:
           IMAGE_TAG: ${{ inputs.image_tag }}
           VERIFY_ONLY: ${{ inputs.verify_only }}
           CLEANUP: ${{ inputs.cleanup }}
+          ALLOW_NO_DB_BACKUP: ${{ inputs.allow_no_db_backup }}
         run: |
           bash scripts/deploy.sh "$IMAGE_TAG" "$VERIFY_ONLY" "$CLEANUP"
 
@@ -64,7 +79,10 @@ jobs:
     name: Deploy ke Akamai VM
     if: ${{ inputs.target == 'akamai' || inputs.target == 'all' }}
     runs-on: [self-hosted, Linux, X64, omniroute-akamai]
-    timeout-minutes: 20
+    timeout-minutes: 25
+    concurrency:
+      group: omniroute-deploy-akamai
+      cancel-in-progress: false
     env:
       COMPOSE_DIR: /home/ubuntu/omniroute
     steps:
@@ -76,6 +94,7 @@ jobs:
           IMAGE_TAG: ${{ inputs.image_tag }}
           VERIFY_ONLY: ${{ inputs.verify_only }}
           CLEANUP: ${{ inputs.cleanup }}
+          ALLOW_NO_DB_BACKUP: ${{ inputs.allow_no_db_backup }}
         run: |
           bash scripts/deploy.sh "$IMAGE_TAG" "$VERIFY_ONLY" "$CLEANUP"
 
@@ -86,7 +105,10 @@ jobs:
 # - cleanup=normal (default) tidak me-restart container kalau image tidak berubah.
 # - Script HANYA mengubah baris `image:` di docker-compose.yml. Blok environment,
 #   volumes, command, ports TIDAK pernah disentuh.
-# - Volume omniroute-data (DB) tidak pernah dihapus. Di mode full DB di-backup
+# - Volume omniroute-data (DB) tidak pernah dihapus. Di mode full, DB di-backup
 #   dulu ke <COMPOSE_DIR>/db-backup-<stamp>.tar.gz (retention 2 terbaru).
+#   Kalau backup itu GAGAL, cleanup dibatalkan dan container dihidupkan kembali
+#   (exit 1) — supaya tidak ada penghapusan tanpa jaring pengaman. Untuk memaksa
+#   lanjut tanpa backup: set input allow_no_db_backup=true.
 # - Log job memuat laporan disk SEBELUM/SESUDAH + jumlah containerd snapshot,
 #   sehingga penumpukan layer lama langsung kelihatan.

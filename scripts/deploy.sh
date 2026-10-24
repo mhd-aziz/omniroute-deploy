@@ -1,18 +1,24 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# deploy.sh — Deploy OmniRoute via docker compose (EC2 + homelab)
+# deploy.sh — Deploy OmniRoute via docker compose (homelab + akamai)
 # Dipanggil dari GitHub Actions (self-hosted runner), bisa juga manual di host.
 #
 # Usage: deploy.sh [IMAGE_TAG] [VERIFY_ONLY] [CLEANUP]
-#   IMAGE_TAG   : tag Docker Hub diegosouzapw/omniroute (default: next-web).
-#                 JANGAN pakai latest-web — build 27 Ags 2026, lebih tua 3 minggu
-#                 dari next-web (17 Sep 2026) yang sedang berjalan di kedua host.
-#                 Boleh juga digest sha256:<64hex>.
+#   IMAGE_TAG   : tag Docker Hub diegosouzapw/omniroute (default: next-web),
+#                 boleh juga digest sha256:<64hex>.
+#                 JANGAN percaya nama tag — `latest*` bisa menunjuk build yang
+#                 LEBIH TUA dari `next*`. Cek freshness dari registry (field
+#                 `created` pada config blob amd64), bukan dari namanya.
 #   VERIFY_ONLY : true = hanya cek tag + laporan disk, tanpa pull/restart.
 #   CLEANUP     : normal (default) = rmi tag omniroute lain + prune dangling.
 #                 full            = stop -> backup DB -> HAPUS container -> rmi/prune,
 #                                   sehingga containerd GC benar-benar membuang
 #                                   snapshot layer image lama (reclaim besar).
+#
+# ENV opsional:
+#   ALLOW_NO_DB_BACKUP=true : izinkan cleanup=full lanjut WALAU backup DB gagal.
+#                             Default false: backup gagal = cleanup FULL
+#                             dibatalkan dan container dikembalikan hidup.
 #
 # BATASAN PENTING (jangan diubah):
 #   * Script ini TIDAK pernah mengubah isi docker-compose.yml selain baris `image:`.
@@ -31,7 +37,21 @@ case "$CLEANUP" in
   *) echo "FATAL: CLEANUP harus 'normal' atau 'full' (diberikan: $CLEANUP)" >&2; exit 1 ;;
 esac
 
-# ---------- lokasi compose dir (auto-fallback, EC2 dulu lalu homelab) ----------
+# ---------- validasi bentuk tag/digest ----------
+# Input workflow `image_tag` adalah teks bebas. Nilai aneh (spasi, |, &, /)
+# merusak `sed` yang menulis baris image: di docker-compose.yml, jadi ditolak
+# lebih dulu sebelum menyentuh apa pun.
+if [[ "$TAG" == sha256:* ]]; then
+  if [[ ! "${TAG#sha256:}" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "FATAL: digest tidak valid (harus sha256:<64 hex>): $TAG" >&2
+    exit 1
+  fi
+elif [[ ! "$TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$ ]]; then
+  echo "FATAL: tag tidak valid (hanya [A-Za-z0-9._-], maks 128 char): $TAG" >&2
+  exit 1
+fi
+
+# ---------- lokasi compose dir (auto-fallback kalau env tidak diset) ----------
 if [ -n "${COMPOSE_DIR:-}" ]; then
   :
 elif [ -d /home/ubuntu/omniroute ]; then
@@ -54,21 +74,39 @@ BACKUP_FILE="$COMPOSE_DIR/docker-compose.yml.bak-$STAMP"
 BACKUP_KEEP=5
 
 say() { echo "$*"; }
+is_num() { [[ "${1:-}" =~ ^[0-9]+$ ]]; }
 
 # sudo hanya kalau benar-benar NOPASSWD (runner tidak punya TTY untuk password)
 if sudo -n true 2>/dev/null; then SUDO="sudo"; else SUDO=""; fi
 
+# Catatan: helper di bawah tidak boleh membocorkan nilai kosong/non-numerik ke
+# `[ -gt ]` atau aritmetika. Dulu nilai kosong memunculkan
+# "[: : integer expected" di log dan menyamarkan penyebab sebenarnya.
 snap_count() {
+  local n
   if [ -z "$SUDO" ]; then echo "n/a"; return 0; fi
-  $SUDO ctr -n moby snapshots ls 2>/dev/null | tail -n +2 | wc -l | tr -d ' '
+  n="$($SUDO ctr -n moby snapshots ls 2>/dev/null | tail -n +2 | wc -l | tr -d ' ' || true)"
+  is_num "$n" || n="n/a"
+  echo "$n"
 }
 
 dir_size() {
+  local s
   if [ -z "$SUDO" ]; then echo "n/a"; return 0; fi
-  $SUDO du -sh "$1" 2>/dev/null | cut -f1 || echo "n/a"
+  # JANGAN tambahkan cek `[ -e "$1" ]` di sini: path seperti /var/lib/containerd
+  # dan /var/lib/docker tidak bisa di-stat user runner (butuh sudo), sehingga
+  # cek itu membuat nilai yang sebenarnya terbaca jadi "n/a". Serahkan ke du;
+  # hasil kosong (path memang tidak ada) tetap dilaporkan "n/a".
+  s="$($SUDO du -sh "$1" 2>/dev/null | cut -f1 || true)"
+  echo "${s:-n/a}"
 }
 
-free_bytes() { df -B1 --output=avail / | tail -1 | tr -d ' '; }
+free_bytes() {
+  local n
+  n="$(df -B1 --output=avail / 2>/dev/null | tail -1 | tr -d ' ' || true)"
+  is_num "$n" || n=0
+  echo "$n"
+}
 
 human_bytes() {
   awk -v b="$1" 'BEGIN{
@@ -89,28 +127,68 @@ disk_report() {
   docker system df 2>/dev/null || true
 }
 
+# Backup volume DB ke <COMPOSE_DIR>/db-backup-<stamp>.tar.gz.
+# Return 0 = aman lanjut, 1 = GAGAL (pemanggil WAJIB memperlakukannya serius).
+#
+# Dua jebakan yang sudah TERBUKTI di host nyata (homelab + akamai) dan harus
+# dihindari — keduanya dulu membuat backup "sukses" padahal tidak ada berkas:
+#  1. JANGAN jadikan `[ -d "$vol" ]` syarat. /var/lib/docker mode
+#     `drwx--x--- root:root`; group `docker` tidak bisa menembus path itu,
+#     sehingga user runner selalu menyimpulkan "volume tidak ditemukan" dan
+#     backup dilewati diam-diam walau `docker volume inspect` berhasil.
+#  2. JANGAN percaya exit code tar saja: arsip 0 byte / rusak harus ditolak,
+#     jadi arsip diverifikasi ulang dengan `tar -tzf` + dicek memuat storage.sqlite.
 backup_db() {
-  local vol out
+  local vol out ok=0
   vol="$(docker volume inspect omniroute-data --format '{{.Mountpoint}}' 2>/dev/null || true)"
-  if [ -z "$vol" ] || [ ! -d "$vol" ]; then
-    say "WARNING: volume omniroute-data tidak ditemukan — backup DB dilewati"
+  if [ -z "$vol" ]; then
+    say "INFO: volume omniroute-data tidak ada di host ini — tidak ada DB untuk di-backup"
     return 0
   fi
+
   out="$COMPOSE_DIR/db-backup-$STAMP.tar.gz"
   say "backup DB: $vol -> $(basename "$out")"
-  # tar menulis ke stdout supaya file jadi milik user runner (bukan root)
-  if $SUDO tar -czf - -C "$vol" . > "$out" 2>/dev/null || tar -czf - -C "$vol" . > "$out" 2>/dev/null; then
-    ls -lh "$out" || true
-  else
-    say "WARNING: backup DB GAGAL — deploy dilanjutkan tanpa backup (berisiko)"
+
+  # Urutan percobaan: 1) sudo, 2) tanpa sudo, 3) lewat container (image sudah
+  # lokal; uid image bisa membaca volume). Semua menulis ke stdout supaya file
+  # jadi milik user runner, bukan root. `--warning=no-file-changed` mencegah
+  # WAL/shm yang berubah saat tar mengotori log / merusak exit code.
+  if [ -n "$SUDO" ] && $SUDO tar --warning=no-file-changed -czf - -C "$vol" . > "$out" 2>/dev/null; then
+    ok=1
+  elif tar --warning=no-file-changed -czf - -C "$vol" . > "$out" 2>/dev/null; then
+    ok=1
+  elif docker run --rm -v omniroute-data:/src:ro --entrypoint tar "$IMAGE" \
+         --warning=no-file-changed -czf - -C /src . > "$out" 2>/dev/null; then
+    ok=1
+  fi
+
+  if [ "$ok" != "1" ] || [ ! -s "$out" ] || ! tar -tzf "$out" >/dev/null 2>&1; then
+    say "WARNING: backup DB GAGAL (arsip kosong / tidak terbaca / tar error)"
+    rm -f "$out" 2>/dev/null || true
+    return 1
+  fi
+
+  if ! tar -tzf "$out" 2>/dev/null | grep -qx '\./storage\.sqlite'; then
+    # Arsip valid tapi tanpa DB. Kalau DB memang belum ada di volume (host baru /
+    # DB belum dibuat) itu bukan kegagalan. Kalau DB ada, backup tidak lengkap.
+    if docker run --rm -v omniroute-data:/src:ro --entrypoint sh "$IMAGE" \
+         -c 'test -e /src/storage.sqlite' >/dev/null 2>&1; then
+      say "WARNING: arsip backup TIDAK memuat storage.sqlite padahal DB ada"
+      rm -f "$out" 2>/dev/null || true
+      return 1
+    fi
+    say "INFO: volume belum punya storage.sqlite (DB belum dibuat) — tidak ada yang di-backup"
     rm -f "$out" 2>/dev/null || true
     return 0
   fi
+
+  ls -lh "$out" || true
   # retention: simpan 2 backup DB terbaru
   ls -1t "$COMPOSE_DIR"/db-backup-*.tar.gz 2>/dev/null | tail -n +3 | while read -r old; do
     say "  hapus backup DB lama: $(basename "$old")"
-    $SUDO rm -f "$old" 2>/dev/null || rm -f "$old" 2>/dev/null || true
+    rm -f "$old" 2>/dev/null || true
   done
+  return 0
 }
 
 cleanup_tags() {
@@ -151,13 +229,17 @@ cleanup_tags() {
 }
 
 retention_compose_backup() {
-  # HANYA dipanggil setelah deploy sukses — kalau gagal, semua backup dibiarkan
-  # ls gagal (exit 2) kalau glob tidak match — e.g. host baru belum punya
-  # backup sama sekali. Jangan biarkan itu membunuh script (set -e/pipefail).
+  # HANYA dipanggil setelah deploy sukses — kalau gagal, semua backup dibiarkan.
+  # URUTKAN BERDASARKAN NAMA, bukan mtime: backup dibuat dengan `cp -a` sehingga
+  # mtime-nya mewarisi file compose lama, jadi urutan mtime menyesatkan.
+  # Stamp di nama (%Y%m%d-%H%M%S) = kronologis. Hanya berkas ber-stamp digit
+  # yang dihitung, sehingga backup manual (mis. .bak-hermes-<tgl>) tidak pernah
+  # tersentuh, dan backup run ini (nama terbaru) selalu di posisi pertama.
   local olds
-  olds="$(ls -1t "$COMPOSE_DIR"/docker-compose.yml.bak-* 2>/dev/null || true)"
+  olds="$(ls -1 "$COMPOSE_DIR"/docker-compose.yml.bak-[0-9]* 2>/dev/null | sort -r || true)"
   [ -z "$olds" ] && return 0
   echo "$olds" | tail -n +$((BACKUP_KEEP+1)) | while read -r f; do
+    if [ -n "${BACKUP_FILE:-}" ] && [ "$f" = "$BACKUP_FILE" ]; then continue; fi
     say "  hapus backup compose lama: $(basename "$f")"
     rm -f "$f" 2>/dev/null || true
   done
@@ -218,6 +300,9 @@ fi
 OLD_IMAGE_LINE="$(grep 'image: diegosouzapw/omniroute' "$COMPOSE_FILE" || true)"
 if [ "$OLD_IMAGE_LINE" = "    image: $IMAGE" ] || [ "$OLD_IMAGE_LINE" = "image: $IMAGE" ]; then
   say "compose sudah memakai $IMAGE — tidak ada perubahan isi compose"
+  # Sengaja dihapus: tidak ada perubahan isi, jadi backup tidak perlu disimpan.
+  # Karena itu "backup compose hilang" setelah redeploy TAG SAMA adalah normal,
+  # bukan bug.
   rm -f "$BACKUP_FILE"
   COMPOSE_CHANGED=false
 else
@@ -245,8 +330,9 @@ fi
 TARGET_ID="$(docker image inspect "$IMAGE" --format '{{.Id}}' 2>/dev/null || true)"
 say "image target terpasang: ${TARGET_ID:-<n/a>}"
 
-# smoke test image baru (non-fatal)
-SMOKE="$(docker run --rm --entrypoint node "$IMAGE" -e "console.log(require('/app/package.json').version)" 2>/dev/null || true)"
+# smoke test image baru (non-fatal, tanpa jaringan — jangan biarkan image baru
+# melakukan apa pun yang butuh koneksi hanya untuk membaca versi)
+SMOKE="$(docker run --rm --network none --entrypoint node "$IMAGE" -e "console.log(require('/app/package.json').version)" 2>/dev/null || true)"
 say "versi image baru: ${SMOKE:-<tidak terbaca, lanjut>}"
 
 # ---------- 4. cleanup FULL: stop -> backup DB -> hapus container -> rmi ----------
@@ -255,10 +341,33 @@ say "versi image baru: ${SMOKE:-<tidak terbaca, lanjut>}"
 if [ "$CLEANUP" = "full" ]; then
   say "--- cleanup FULL ---"
   docker compose stop omniroute || true
-  backup_db
+
+  if ! backup_db; then
+    if [ "${ALLOW_NO_DB_BACKUP:-false}" = "true" ]; then
+      say "  ALLOW_NO_DB_BACKUP=true — lanjut TANPA backup DB (izin eksplisit)"
+    else
+      # Fail-safe: jangan hapus container/volume tanpa jaring pengaman. Deploy
+      # tetap sukses-nya bukan prioritas; integritas DB yang utama.
+      echo "FATAL: backup DB gagal — cleanup FULL dibatalkan." >&2
+      echo "       Container dikembalikan hidup, image lama tidak disentuh." >&2
+      echo "       Mau lanjut tanpa backup? set ALLOW_NO_DB_BACKUP=true." >&2
+      docker compose start omniroute >/dev/null 2>&1 \
+        || docker compose up -d --no-deps omniroute >/dev/null 2>&1 || true
+      exit 1
+    fi
+  fi
+
   CID="$(docker inspect -f '{{.Id}}' omniroute 2>/dev/null || true)"
   if [ -n "$CID" ]; then
-    docker rm "$CID" >/dev/null && say "container dihapus: $CID"
+    # Jangan pakai `docker rm "$CID" >/dev/null && say ...`: kalau rm gagal,
+    # bash tidak menghentikan script (AN-OR list dikecualikan set -e) sehingga
+    # kegagalan rm dulu lewat tanpa jejak sama sekali.
+    if rm_out="$(docker rm "$CID" 2>&1)"; then
+      say "container dihapus: $CID"
+    else
+      say "  WARNING: gagal hapus container $CID — $rm_out"
+      say "           Lanjut, tapi reclaim snapshot mungkin tidak jalan."
+    fi
   else
     say "container tidak ada (sudah terhapus)"
   fi
@@ -308,8 +417,12 @@ else
 fi
 
 # Port probe diambil dari port host yang di-publish container
-# (homelab = 20128, akamai = 20129 — tidak di-hardcode lagi)
-PORT="$(docker inspect omniroute --format '{{range $p, $b := .NetworkSettings.Ports}}{{range $b}}{{.HostPort}}{{end}}{{end}}' 2>/dev/null || true)"
+# (homelab = 20128, akamai = 20129 — tidak di-hardcode lagi).
+# Ambil HANYA port pertama: kalau container mem-publish lebih dari satu port,
+# nilai gabungan (mis. "2012820129") membuat probe selalu gagal -> job dianggap
+# gagal padahal deploy sukses.
+PORT="$(docker inspect omniroute --format '{{range $p, $b := .NetworkSettings.Ports}}{{range $b}}{{.HostPort}}{{"\n"}}{{end}}{{end}}' 2>/dev/null | head -1 || true)"
+PORT="${PORT//[^0-9]/}"
 PORT="${PORT:-20128}"
 LIVE="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/livez" || true)"
 HEALTH="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/healthz" || true)"
@@ -347,7 +460,7 @@ say "ruang bebas: $(human_bytes "$FREE_BEFORE") -> $(human_bytes "$FREE_AFTER") 
 say "containerd snapshots: $SNAP_BEFORE -> $SNAP_AFTER"
 say "image omniroute terpasang:"
 docker images diegosouzapw/omniroute --format '  {{.Repository}}:{{.Tag}} | {{.ID}} | {{.Size}} | {{.CreatedSince}}' || true
-if [ "$CLEANUP" = "normal" ] && [ "$SNAP_AFTER" != "n/a" ] && [ "$SNAP_AFTER" -gt 40 ]; then
+if [ "$CLEANUP" = "normal" ] && is_num "$SNAP_AFTER" && [ "$SNAP_AFTER" -gt 40 ]; then
   say "CATATAN: snapshot masih banyak ($SNAP_AFTER). Trigger workflow lagi dengan cleanup=full untuk reklaim."
 fi
 say "==> SELESAI $(date -u +%FT%TZ)"
